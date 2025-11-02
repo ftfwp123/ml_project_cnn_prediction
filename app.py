@@ -57,16 +57,24 @@ def train_and_save_model():
     return model
 
 def load_model():
-    """Load the pre-trained model"""
+    """Load the pre-trained model or create a new one"""
     if os.path.exists(MODEL_PATH):
-        print("Loading pre-trained model...")
-        return tf.keras.models.load_model(MODEL_PATH)
+        print(f"Loading pre-trained model from {MODEL_PATH}...")
+        try:
+            return tf.keras.models.load_model(MODEL_PATH)
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            print("Creating new untrained model...")
+            return create_model()
     else:
-        print("No pre-trained model found. Training new model...")
-        return train_and_save_model()
+        print("WARNING: No pre-trained model found!")
+        print("Creating new untrained model. Use /retrain endpoint to train it.")
+        return create_model()
 
 # Load model at startup
+print("Initializing model...")
 model = load_model()
+print("Model loaded successfully!")
 
 # CIFAR-10 class names
 class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 
@@ -82,6 +90,20 @@ def preprocess_image(image):
     image_array = np.expand_dims(image_array, axis=0)
     return image_array
 
+@app.route('/', methods=['GET'])
+def home():
+    """Home endpoint with API information"""
+    return jsonify({
+        'message': 'CIFAR-10 Image Classification API',
+        'endpoints': {
+            'GET /': 'API information',
+            'GET /health': 'Health check',
+            'POST /predict': 'Classify an image (send base64 encoded image in JSON)',
+            'POST /retrain': 'Retrain the model (may take several minutes)'
+        },
+        'model_status': 'loaded' if model else 'not loaded'
+    })
+
 @app.route('/predict', methods=['POST'])
 def predict():
     """Endpoint for image classification predictions"""
@@ -90,7 +112,7 @@ def predict():
         data = request.get_json()
         
         if not data or 'image' not in data:
-            return jsonify({'error': 'No image data provided'}), 400
+            return jsonify({'error': 'No image data provided. Send JSON with "image" field containing base64 encoded image'}), 400
         
         # Decode base64 image
         image_data = base64.b64decode(data['image'])
@@ -100,7 +122,7 @@ def predict():
         processed_image = preprocess_image(image)
         
         # Make prediction
-        predictions = model.predict(processed_image)
+        predictions = model.predict(processed_image, verbose=0)
         predicted_class = np.argmax(predictions[0])
         confidence = float(predictions[0][predicted_class])
         
@@ -121,11 +143,16 @@ def predict():
 
 @app.route('/retrain', methods=['POST'])
 def retrain_model():
-    """Endpoint to retrain the model"""
+    """Endpoint to retrain the model (WARNING: This takes several minutes)"""
     try:
         global model
+        print("Starting model retraining...")
         model = train_and_save_model()
-        return jsonify({'message': 'Model retrained successfully'})
+        print("Model retraining completed!")
+        return jsonify({
+            'message': 'Model retrained successfully',
+            'model_path': MODEL_PATH
+        })
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -133,14 +160,22 @@ def retrain_model():
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
-    return jsonify({'status': 'healthy', 'model_loaded': True})
+    model_exists = os.path.exists(MODEL_PATH)
+    return jsonify({
+        'status': 'healthy',
+        'model_loaded': model is not None,
+        'model_file_exists': model_exists,
+        'model_path': MODEL_PATH
+    })
 
 if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
     print("Starting Flask server...")
+    print(f"Server running on port {port}")
     print("Endpoints:")
+    print("  GET  / - API information")
     print("  POST /predict - Classify an image (send base64 encoded image in JSON)")
     print("  POST /retrain - Retrain the model")
     print("  GET  /health - Health check")
     
-    app.run(host='0.0.0.0', port=5500, debug=False)
-# comment something
+    app.run(host='0.0.0.0', port=port, debug=False)
